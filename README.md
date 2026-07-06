@@ -329,10 +329,21 @@ npm run dist       # dist/ にポータブル exe を生成
 exe と**同じフォルダ**に `scenario.txt` や `bg/` `chara/` `bgm/` などを置くと、
 そちらが優先して読み込まれます。exe 本体を作り直さずに中身を差し替えられます。
 
+### exe のアイコンを変える
+
+exe のアイコンは `build/icon.ico`(同梱のデフォルトあり)です。
+**自分の `.ico` で上書きするだけ**で差し替えられ、次回 `npm run dist` から反映されます。
+
+- 形式: Windows の `.ico`。**256×256 を含むマルチサイズ**推奨(16/32/48/256 など)。
+- 参照先は `package.json` の `build.win.icon` で指定しています(既定 `build/icon.ico`)。
+- `npm run start`(開発実行)時のウィンドウ/タスクバーには `build/icon.png` を使います。
+  合わせて差し替えると見た目が揃います。
+- PNG しか手元に無い場合は、オンラインの ico 変換や ImageMagick
+  (`magick icon.png -define icon:auto-resize=256,48,32,16 build/icon.ico`)で作成できます。
+
 ### バージョンや productName を変える
 
 `package.json` の `version` / `build.productName` を編集してください。
-アイコンを付けたい場合は `build.win.icon` に `.ico` のパスを指定します。
 
 ---
 

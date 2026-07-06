@@ -48,12 +48,16 @@ app.whenReady().then(() => {
   });
 
   Menu.setApplicationMenu(null);
+  // 開発実行(npm run start)時のウィンドウ/タスクバーアイコン。
+  // パッケージ済み exe では exe 埋め込みアイコンが自動的に使われる。
+  const iconPath = path.join(APP_ROOT, "build", "icon.png");
   const win = new BrowserWindow({
     width: 1280,
     height: 720,
     useContentSize: true,
     backgroundColor: "#0b0d12",
     title: "Darask Novel Engine",
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: { contextIsolation: true },
   });
   win.loadURL("app://game/index.html");

@@ -6,8 +6,15 @@
 
 /* ---------- 定数 ---------- */
 const STORAGE_PREFIX = "dne_";
-const ASSET_DIR = { bg: "bg/", cg: "cg/", bgm: "bgm/", se: "se/" };
+const ASSET_DIR = { bg: "bg/", cg: "cg/", bgm: "bgm/", se: "se/", chara: "chara/" };
 const ENTRY_FILE = "scenario.txt";
+
+// 立ち絵の表示位置キーワード → 内部位置
+const CHARA_POS = {
+  left: "left", l: "left", "左": "left",
+  center: "center", c: "center", "中": "center", "中央": "center",
+  right: "right", r: "right", "右": "right",
+};
 
 const DEFAULT_KEYS = {
   advance:    "Enter",       // 読み進める
@@ -58,6 +65,8 @@ const G = {
   shownIndex: -1,   // いま表示中のテキストノード番号(セーブ用)
   curBg: "",
   curCg: "",
+  chara: {},        // 表示中の立ち絵 { 名前: { pos, expr } }
+  lastSpeaker: null,// 直近に喋ったキャラ名(立ち絵ハイライト用)
 
   typing: false,
   typeTimer: null,
@@ -321,10 +330,18 @@ async function boot() {
 /* =========================================================
  * アセット (存在しない場合はプレースホルダを自動生成)
  * ========================================================= */
-function placeholderImage(label) {
+const PH_CACHE = {}; // 生成済みプレースホルダ画像を使い回してチラつきを防ぐ
+
+function hueOf(str) {
   let h = 0;
-  for (const c of label) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  const hue = h % 360;
+  for (const c of str) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+
+function placeholderImage(label) {
+  const key = "bg:" + label;
+  if (PH_CACHE[key]) return PH_CACHE[key];
+  const hue = hueOf(label);
 
   const cv = document.createElement("canvas");
   cv.width = 1280; cv.height = 720;
@@ -338,7 +355,42 @@ function placeholderImage(label) {
   ctx.font = "40px sans-serif";
   ctx.textAlign = "center";
   ctx.fillText(label, 640, 372);
-  return cv.toDataURL();
+  return (PH_CACHE[key] = cv.toDataURL());
+}
+
+/* 立ち絵のプレースホルダ。expr が空ならベース(体+名前)、
+ * expr 指定時は顔の位置に表情ラベルだけを描いた差分(それ以外は透過)を返す。 */
+function placeholderSprite(name, expr) {
+  const key = "chara:" + name + "|" + expr;
+  if (PH_CACHE[key]) return PH_CACHE[key];
+  const cv = document.createElement("canvas");
+  cv.width = 600; cv.height = 1000;
+  const ctx = cv.getContext("2d");
+  const hue = hueOf(name);
+  const rr = (x, y, w, h, r) => {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+    else { ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+           ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+           ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+  };
+
+  if (!expr) {
+    ctx.fillStyle = `hsl(${hue}, 45%, 45%)`;
+    rr(150, 300, 300, 700, 70); ctx.fill();                 // 胴体
+    ctx.beginPath(); ctx.arc(300, 230, 140, 0, Math.PI * 2);
+    ctx.fillStyle = `hsl(${hue}, 40%, 62%)`; ctx.fill();     // 頭
+    ctx.fillStyle = "rgba(255,255,255,.92)";
+    ctx.font = "bold 56px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(name, 300, 640);
+  } else {
+    ctx.fillStyle = `hsl(${hue}, 70%, 32%)`;
+    rr(170, 300, 260, 90, 18); ctx.fill();                  // 表情バッジ(顔付近)
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 46px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(expr, 300, 362);
+  }
+  return (PH_CACHE[key] = cv.toDataURL());
 }
 
 function setImage(imgEl, dir, file) {
@@ -374,6 +426,81 @@ function playSE(file) {
 }
 
 /* =========================================================
+ * 立ち絵 (背景とは別レイヤー。ベース画像 + 表情差分を重ねる)
+ *   ファイル規約: chara/名前.png (ベース) と chara/名前_表情.png (差分)
+ * ========================================================= */
+function showChara(arg) {
+  const tokens = arg.trim().split(/\s+/).filter(Boolean);
+  const name = tokens[0];
+  if (!name) return;
+  let pos = null, expr = null;
+  for (const tok of tokens.slice(1)) {
+    const p = CHARA_POS[tok.toLowerCase()] || CHARA_POS[tok];
+    if (p) pos = p;
+    else expr = tok;
+  }
+  const cur = G.chara[name] || {};
+  G.chara[name] = {
+    pos: pos || cur.pos || "center",
+    expr: expr !== null ? expr : (cur.expr || ""),
+  };
+  renderChara();
+}
+
+/* 表情だけを差し替える (立ち絵はそのまま) */
+function faceChara(arg) {
+  const tokens = arg.trim().split(/\s+/).filter(Boolean);
+  const name = tokens[0];
+  if (!name) return;
+  const cur = G.chara[name] || { pos: "center" };
+  G.chara[name] = { pos: cur.pos, expr: tokens[1] || "" };
+  renderChara();
+}
+
+function hideChara(arg) {
+  const name = arg.trim();
+  if (!name || name.toLowerCase() === "all" || name === "全員") G.chara = {};
+  else delete G.chara[name];
+  renderChara();
+}
+
+/* G.chara の状態からレイヤーを組み立て直す */
+function renderChara() {
+  const layer = $("chara-layer");
+  layer.innerHTML = "";
+  for (const [name, st] of Object.entries(G.chara)) {
+    const slot = document.createElement("div");
+    slot.className = "chara-slot pos-" + st.pos;
+    slot.dataset.name = name;
+
+    const base = document.createElement("img");
+    base.className = "chara-base";
+    base.onerror = () => { base.onerror = null; base.src = placeholderSprite(name, ""); };
+    base.src = ASSET_DIR.chara + name + ".png";
+    slot.appendChild(base);
+
+    if (st.expr) {
+      const face = document.createElement("img");
+      face.className = "chara-face";
+      face.onerror = () => { face.onerror = null; face.src = placeholderSprite(name, st.expr); };
+      face.src = ASSET_DIR.chara + name + "_" + st.expr + ".png";
+      slot.appendChild(face);
+    }
+    layer.appendChild(slot);
+  }
+  applyCharaHighlight();
+}
+
+/* 喋っているキャラを明るく、それ以外を少し暗くする */
+function applyCharaHighlight() {
+  const speaker = G.lastSpeaker;
+  const active = speaker && G.chara[speaker];
+  for (const slot of $("chara-layer").children) {
+    slot.classList.toggle("dim", !!active && slot.dataset.name !== speaker);
+  }
+}
+
+/* =========================================================
  * 画面遷移
  * ========================================================= */
 function showScreen(name) {
@@ -390,6 +517,10 @@ function toTitle() {
   G.waiting = false;
   G.inGame = false;
   G.choosing = false;
+  G.chara = {};
+  G.lastSpeaker = null;
+  renderChara();
+  $("cg-img").classList.add("hidden");
   $("choice-box").classList.add("hidden");
   updateContinueButton();
   showScreen("title");
@@ -410,6 +541,8 @@ function makeSnapshot(index) {
     cg: G.curCg,
     bgm: G.bgmName,
     flags: { ...G.flags },
+    chara: JSON.parse(JSON.stringify(G.chara)),
+    speaker: G.lastSpeaker,
   };
 }
 
@@ -444,6 +577,9 @@ async function restoreSnapshot(snap) {
   if (snap.cg) { setImage($("cg-img"), "cg", snap.cg); $("cg-img").classList.remove("hidden"); }
   else $("cg-img").classList.add("hidden");
   if (snap.bgm) playBGM(snap.bgm); else stopBGM();
+  G.chara = snap.chara ? JSON.parse(JSON.stringify(snap.chara)) : {};
+  G.lastSpeaker = snap.speaker || null;
+  renderChara();
 
   $("message-window").classList.remove("hidden");
   $("text-area").textContent = "";
@@ -490,10 +626,18 @@ function advance() {
     return;
   }
 
-  // シナリオ終端
-  showToast("― おしまい ―");
+  // シナリオ終端 → タイトルへ戻る
+  endStory();
+}
+
+/* 物語の終了。必ずタイトル画面へ戻す (@end / シナリオ終端 / エンディング到達) */
+function endStory() {
+  if (!G.inGame) return;
   G.inGame = false;
-  setTimeout(toTitle, 1500);
+  clearInterval(G.typeTimer);
+  G.typing = false;
+  showToast("― おしまい ―");
+  setTimeout(toTitle, 1600);
 }
 
 /* コマンド実行。true を返すと advance を中断する */
@@ -523,6 +667,21 @@ function execCommand(node, idx) {
     case "se":
       playSE(arg);
       break;
+    case "chara":
+    case "show":
+    case "sprite":
+      showChara(arg);
+      break;
+    case "face":
+    case "expr":
+      faceChara(arg);
+      break;
+    case "hide":
+      hideChara(arg);
+      break;
+    case "end":
+      endStory();
+      return true;
     case "scene": {
       const scene = G.parsedFiles[G.file].scenes.find((s) => s.index === idx);
       if (scene) {
@@ -635,6 +794,8 @@ function showText(node) {
     namePlate.style.color = nameColor(node.name);
     namePlate.classList.remove("hidden");
     textArea.classList.remove("narration");
+    G.lastSpeaker = node.name;
+    applyCharaHighlight();
   } else {
     namePlate.classList.add("hidden");
     textArea.classList.add("narration");

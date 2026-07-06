@@ -98,7 +98,41 @@ html, body {
   pointer-events: none;
 }
 
-#cg-img { z-index: 2; }
+#cg-img { z-index: 3; }
+
+/* 立ち絵レイヤー (背景の上、イベントCGの下) */
+#chara-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.chara-slot {
+  position: absolute;
+  bottom: 0;
+  height: 90%;
+  transform: translateX(-50%);
+  transition: filter .3s ease, opacity .3s ease;
+}
+
+.chara-slot.pos-left   { left: 25%; }
+.chara-slot.pos-center { left: 50%; }
+.chara-slot.pos-right  { left: 75%; }
+
+.chara-slot img {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  height: 100%;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 18px rgba(0, 0, 0, .45));
+}
+
+.chara-slot.dim { filter: brightness(.62) saturate(.85); }
 
 #message-window {
   position: absolute;

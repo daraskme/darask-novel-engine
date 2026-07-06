@@ -2,19 +2,26 @@
 @scene グッドエンド
 @bg sunset.jpg
 @bgm ending.mp3
+@hide all
 
 文化祭当日。舞台は大成功のうちに幕を下ろした。
 
 @cg event03.jpg
 
+@cg off
+@chara アオイ center 照れ
 アオイ:ねえ、ユウタ。
+
+@chara ユウタ left 普通
 ユウタ:ん?
+
+@face アオイ 笑顔
 アオイ:あの日、放課後の教室で……声をかけてよかったな、って。
 
 夕日の中で、アオイは今までで一番の笑顔を見せた。
 
 ユウタ:……俺もだよ。
 
-@cg off
-
 ―― GOOD END ――
+
+@end

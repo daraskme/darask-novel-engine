@@ -1,6 +1,7 @@
 node_modules/
 dist/
 public/
+save/
 *.log
 .DS_Store
 Thumbs.db

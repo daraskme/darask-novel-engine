@@ -1,7 +1,7 @@
 /* Darask Novel Engine - Electron ランチャー */
 "use strict";
 
-const { app, BrowserWindow, Menu, protocol, net } = require("electron");
+const { app, BrowserWindow, Menu, protocol, net, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { pathToFileURL } = require("url");
@@ -28,8 +28,38 @@ function insideRoot(root, target) {
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
+/* セーブは exe(ポータブル)と同じ階層の save/ フォルダに JSON で保存する。
+ * 開発実行時はプロジェクト直下の save/ を使う。 */
+function resolveSaveDir() {
+  const base = process.env.PORTABLE_EXECUTABLE_DIR || APP_ROOT;
+  const dir = path.join(base, "save");
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
+  return dir;
+}
+
+function registerSaveIPC() {
+  const saveDir = resolveSaveDir();
+  // ファイル名は basename のみ許可(ディレクトリ外への書き込みを防ぐ)
+  const safe = (name) => path.join(saveDir, path.basename(String(name || "")));
+  ipcMain.handle("dfs:dir", () => saveDir);
+  ipcMain.handle("dfs:list", () => {
+    try { return fs.readdirSync(saveDir).filter((f) => f.endsWith(".json")); }
+    catch (e) { return []; }
+  });
+  ipcMain.handle("dfs:read", (e, name) => {
+    try { return fs.readFileSync(safe(name), "utf8"); } catch (err) { return null; }
+  });
+  ipcMain.handle("dfs:write", (e, name, data) => {
+    try { fs.writeFileSync(safe(name), String(data), "utf8"); return true; } catch (err) { return false; }
+  });
+  ipcMain.handle("dfs:remove", (e, name) => {
+    try { fs.unlinkSync(safe(name)); return true; } catch (err) { return false; }
+  });
+}
+
 app.whenReady().then(() => {
   const userRoot = resolveUserRoot();
+  registerSaveIPC();
 
   protocol.handle("app", (req) => {
     const { pathname } = new URL(req.url);
@@ -58,7 +88,10 @@ app.whenReady().then(() => {
     backgroundColor: "#0b0d12",
     title: "Darask Novel Engine",
     icon: fs.existsSync(iconPath) ? iconPath : undefined,
-    webPreferences: { contextIsolation: true },
+    webPreferences: {
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+    },
   });
   win.loadURL("app://game/index.html");
 });

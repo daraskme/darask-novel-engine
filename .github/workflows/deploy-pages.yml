@@ -23,8 +23,10 @@ jobs:
       - name: Collect web files
         run: |
           mkdir -p public
-          cp index.html style.css engine.js public/
+          cp index.html style.css engine.js manifest.webmanifest sw.js public/
           cp *.txt public/ 2>/dev/null || true
+          mkdir -p public/build
+          cp build/icon.png public/build/ 2>/dev/null || true
           for d in bg chara cg bgm se voice; do
             [ -d "$d" ] && cp -r "$d" public/ || true
           done

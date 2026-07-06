@@ -602,5 +602,94 @@ button, .slot, .thumb, .scene-item { touch-action: manipulation; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(150,165,230,.35); border-radius: 4px; }
 
-/* ============ ルビ ============ */
+/* ============ ルビ / 既読テキスト ============ */
 #text-area ruby rt { font-size: .5em; color: #aab6ff; }
+#text-area.read { color: #b7bcd0; }
+#text-area.read.narration { color: #a7abbe; }
+
+/* ============ 画面演出 ============ */
+#fx-flash, #fx-fade {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  opacity: 0;
+}
+#fx-flash { background: #fff; }
+#fx-fade { background: #000; }
+
+@keyframes fx-shake {
+  0%, 100% { transform: translate(0, 0); }
+  15% { transform: translate(-1.2%, 1%) rotate(-.4deg); }
+  30% { transform: translate(1.4%, -.8%) rotate(.5deg); }
+  45% { transform: translate(-1%, 1.2%) rotate(-.3deg); }
+  60% { transform: translate(1.2%, .6%) rotate(.4deg); }
+  75% { transform: translate(-.8%, -1%) rotate(-.2deg); }
+}
+#screen-game.fx-shake { animation: fx-shake .5s ease; }
+
+/* ============ 名前入力 ============ */
+.input-panel {
+  text-align: center;
+  padding: 2.4em 3em;
+  background: rgba(16,19,30,.97);
+  border: 1px solid rgba(150,165,230,.5);
+  border-radius: 12px;
+}
+.input-panel p { margin-bottom: 1.1em; font-size: clamp(14px, 1.9vw, 19px); }
+.input-panel input {
+  width: min(70vw, 320px);
+  padding: .6em .8em;
+  font-size: clamp(14px, 1.9vw, 20px);
+  color: #eef1ff;
+  background: rgba(0,0,0,.4);
+  border: 1px solid rgba(150,165,230,.5);
+  border-radius: 6px;
+  text-align: center;
+}
+.input-panel button {
+  display: block;
+  margin: 1.2em auto 0;
+  padding: .6em 2.4em;
+  font-size: clamp(14px, 1.7vw, 18px);
+  letter-spacing: .15em;
+  color: #eef1ff;
+  background: rgba(120,140,255,.25);
+  border: 1px solid rgba(160,180,255,.7);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.input-panel button:hover { background: rgba(120,140,255,.45); }
+
+/* ============ セーブ画面: 書き出し/読み込み・選択済み・ボイス ============ */
+.sh-actions { display: flex; gap: 8px; align-items: center; }
+.sh-actions button, .import-btn {
+  padding: .4em 1.1em;
+  font-size: clamp(11px, 1.4vw, 15px);
+  color: #dfe3f5;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(150,165,230,.35);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sh-actions button:hover, .import-btn:hover { background: rgba(120,140,255,.18); }
+
+#choice-box button.chosen { border-color: rgba(150,220,150,.7); }
+#choice-box button.chosen::after {
+  content: "✓";
+  margin-left: .6em;
+  color: #9fe6a0;
+  font-weight: bold;
+}
+
+.bl-voice {
+  margin-left: .8em;
+  padding: 0 .5em;
+  color: #aab6ff;
+  background: rgba(120,140,255,.15);
+  border: 1px solid rgba(150,165,230,.4);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: .9em;
+}
+.bl-voice:hover { background: rgba(120,140,255,.35); }

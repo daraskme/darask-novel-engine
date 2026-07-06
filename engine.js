@@ -19,8 +19,9 @@ const CHARA_POS = {
 // 既知の @コマンド(検証で未知コマンドを警告するのに使う)
 const KNOWN_CMDS = new Set([
   "title", "titlebg", "bg", "cg", "chara", "show", "sprite", "face", "expr",
-  "hide", "bgm", "se", "voice", "scene", "wait", "set", "jump", "goto",
+  "hide", "bgm", "se", "voice", "amb", "scene", "wait", "set", "jump", "goto",
   "label", "if", "end", "ending",
+  "shake", "flash", "fadeout", "fadein", "input",
 ]);
 
 const DEFAULT_KEYS = {
@@ -122,6 +123,13 @@ const G = {
   bgmName: "",
   bgmFadeTimer: null,
   voice: null,
+  amb: null,
+  ambName: "",
+  pendingVoice: null,   // 次のセリフに紐づくボイス
+  lastLineVoice: null,  // バックログ再生用
+  chosenSet: new Set(), // 選択済みの選択肢 "file|テキスト"
+  devTimer: null,       // 開発モードの自動リロード
+  devRaw: {},           // 自動リロード比較用の生テキスト
 };
 
 /* ---------- DOM ---------- */
@@ -138,16 +146,81 @@ const screens = {
 /* =========================================================
  * ストレージ
  * ========================================================= */
-function store(key, val) {
-  try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(val)); } catch (e) {}
+/* 永続化は「メモリ上の CACHE + バックエンド書き込み」方式。
+ *  - exe(Electron): window.daraskFS 経由で save/<key>.json に読み書き(exeと同じ階層)
+ *  - ブラウザ: localStorage
+ * どちらでも restore()/store() は同期的に CACHE を参照/更新する。 */
+let FS = null;
+const CACHE = {};
+const flushTimers = {};
+
+async function initStorage() {
+  FS = (typeof window !== "undefined" && window.daraskFS) || null;
+  if (FS) {
+    let files = [];
+    try { files = await FS.list(); } catch (e) {}
+    for (const f of files) {
+      const key = f.replace(/\.json$/, "");
+      try { const txt = await FS.read(f); if (txt != null) CACHE[key] = JSON.parse(txt); } catch (e) {}
+    }
+  } else {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const lk = localStorage.key(i);
+        if (lk && lk.startsWith(STORAGE_PREFIX)) {
+          try { CACHE[lk.slice(STORAGE_PREFIX.length)] = JSON.parse(localStorage.getItem(lk)); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }
 }
-function restore(key, fallback) {
-  try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + key);
-    return raw === null ? fallback : JSON.parse(raw);
-  } catch (e) { return fallback; }
+
+function persistKey(key) {
+  const val = CACHE[key];
+  if (FS) {
+    // セーブスロットは即書き込み、頻繁に更新される他キーはデバウンス
+    if (key.startsWith("slot_")) { FS.write(key + ".json", JSON.stringify(val)); }
+    else {
+      clearTimeout(flushTimers[key]);
+      flushTimers[key] = setTimeout(() => FS.write(key + ".json", JSON.stringify(val)), 250);
+    }
+  } else {
+    try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(val)); } catch (e) {}
+  }
 }
-function removeKey(key) { try { localStorage.removeItem(STORAGE_PREFIX + key); } catch (e) {} }
+
+function store(key, val) { CACHE[key] = val; persistKey(key); }
+function restore(key, fallback) { return key in CACHE ? CACHE[key] : fallback; }
+function removeKey(key) {
+  delete CACHE[key];
+  if (FS) { clearTimeout(flushTimers[key]); FS.remove(key + ".json"); }
+  else { try { localStorage.removeItem(STORAGE_PREFIX + key); } catch (e) {} }
+}
+
+/* エクスポート/インポート(全セーブ・設定・解放状況を1ファイルで) */
+function exportAll() {
+  const blob = new Blob([JSON.stringify({ engine: "darask-novel-engine", data: CACHE }, null, 2)],
+    { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "darask-save.json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function importAll(file) {
+  file.text().then((txt) => {
+    let obj;
+    try { obj = JSON.parse(txt); } catch (e) { showToast("読み込めないファイルです"); return; }
+    const data = obj && obj.data ? obj.data : obj;
+    if (!data || typeof data !== "object") { showToast("形式が違います"); return; }
+    for (const [k, v] of Object.entries(data)) store(k, v);
+    loadPersistent();
+    updateContinueButton();
+    showToast("読み込みました");
+    if (!$("overlay-saveload").classList.contains("hidden")) buildSlotGrid();
+  });
+}
 
 function loadPersistent() {
   G.keys = { ...DEFAULT_KEYS, ...restore("keys", {}) };
@@ -159,6 +232,7 @@ function loadPersistent() {
   G.readSet = new Set(restore("readSet", []));
   G.endingRegistry = restore("endingRegistry", []);
   G.unlockedEndings = new Set(restore("unlockedEndings", []));
+  G.chosenSet = new Set(restore("chosenSet", []));
 }
 
 function savePersistent() {
@@ -512,6 +586,7 @@ async function crawlFiles() {
 }
 
 async function boot() {
+  await initStorage();
   loadPersistent();
   syncSettingsUI();
   updateContinueButton();
@@ -689,6 +764,95 @@ function playVoice(file) {
 }
 function stopVoice() { if (G.voice) { G.voice.pause(); G.voice = null; } }
 
+/* 環境音(BGMと別レイヤーでループ) */
+function playAmb(file) {
+  if (file === G.ambName) return;
+  stopAmb();
+  if (!file || file.toLowerCase() === "stop") return;
+  const a = new Audio(ASSET_DIR.bgm + file);
+  a.loop = true;
+  a.volume = (G.settings.bgmVol / 100) * 0.85;
+  a.play().catch(() => {});
+  G.amb = a; G.ambName = file;
+}
+function stopAmb() { if (G.amb) { G.amb.pause(); G.amb = null; } G.ambName = ""; }
+
+/* =========================================================
+ * 画面演出(揺れ・フラッシュ・暗転/明転)
+ * ========================================================= */
+function screenShake(ms) {
+  const g = $("screen-game");
+  g.classList.remove("fx-shake");
+  void g.offsetWidth; // リフロー
+  g.classList.add("fx-shake");
+  setTimeout(() => g.classList.remove("fx-shake"), ms);
+}
+
+function screenFlash(arg) {
+  const parts = arg.split(/\s+/);
+  let color = "#ffffff", ms = 300;
+  for (const p of parts) { if (/^#|^rgb/.test(p)) color = p; else if (/^\d+$/.test(p)) ms = parseInt(p, 10); }
+  const el = $("fx-flash");
+  el.style.transition = "none";
+  el.style.background = color;
+  el.style.opacity = "1";
+  void el.offsetWidth;
+  el.style.transition = `opacity ${ms}ms ease`;
+  el.style.opacity = "0";
+}
+
+/* 暗転(to=1)/明転(to=0)。完了までゲーム進行を止める */
+function screenFade(to, arg) {
+  const ms = parseInt(arg, 10) || FADE_MS;
+  const el = $("fx-fade");
+  if (G.skipHeld) { el.style.transition = "none"; el.style.opacity = String(to); return false; }
+  el.style.transition = `opacity ${ms}ms ease`;
+  el.style.opacity = String(to);
+  G.waiting = true;
+  clearTimeout(G.waitTimer);
+  G.waitTimer = setTimeout(() => { G.waiting = false; advance(); }, ms);
+  return true;
+}
+
+/* =========================================================
+ * 名前入力(@input フラグ [プロンプト])
+ * ========================================================= */
+function askInput(arg) {
+  const sp = arg.search(/\s/);
+  const name = (sp === -1 ? arg : arg.slice(0, sp)).trim();
+  const prompt = sp === -1 ? "名前を入力してください" : expandVars(arg.slice(sp + 1).trim());
+  if (!name) return false;
+
+  $("input-prompt").textContent = prompt;
+  const field = $("input-field");
+  field.value = typeof G.flags[name] === "string" ? G.flags[name] : "";
+  $("overlay-input").classList.remove("hidden");
+  G.waiting = true;
+  setTimeout(() => field.focus(), 30);
+
+  const submit = () => {
+    const v = field.value.trim();
+    G.flags[name] = v || name; // 空なら変数名を仮の名前にする
+    $("overlay-input").classList.add("hidden");
+    field.onkeydown = null;
+    $("input-ok").onclick = null;
+    G.waiting = false;
+    advance();
+  };
+  $("input-ok").onclick = submit;
+  field.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } };
+  return true;
+}
+
+/* 本文中の {フラグ名} を値に展開する */
+function expandVars(text) {
+  if (text.indexOf("{") === -1) return text;
+  return text.replace(/\{([^}]+)\}/g, (m, key) => {
+    const v = G.flags[key.trim()];
+    return v === undefined || v === null ? m : String(v);
+  });
+}
+
 /* =========================================================
  * 立ち絵(背景と別レイヤー・差分・フェード/スライド)
  * ========================================================= */
@@ -808,11 +972,20 @@ function showScreen(name) {
   }
 }
 
+function resetFx() {
+  const f = $("fx-fade"), fl = $("fx-flash");
+  f.style.transition = "none"; f.style.opacity = "0";
+  fl.style.transition = "none"; fl.style.opacity = "0";
+  $("screen-game").classList.remove("fx-shake");
+}
+
 function toTitle() {
   stopAuto();
   endSkip();
   stopBGM(false);
+  stopAmb();
   stopVoice();
+  resetFx();
   clearTimeout(G.waitTimer);
   G.waiting = false;
   G.inGame = false;
@@ -841,6 +1014,7 @@ function makeSnapshot(index) {
     bg: G.curBg,
     cg: G.curCg,
     bgm: G.bgmName,
+    amb: G.ambName,
     flags: { ...G.flags },
     chara: JSON.parse(JSON.stringify(G.chara)),
     speaker: G.lastSpeaker,
@@ -883,6 +1057,9 @@ async function restoreSnapshot(snap) {
   else $("cg-img").classList.add("hidden");
   stopBGM(false);
   if (snap.bgm) playBGM(snap.bgm, false);
+  stopAmb();
+  if (snap.amb) playAmb(snap.amb);
+  resetFx();
   G.chara = snap.chara ? JSON.parse(JSON.stringify(snap.chara)) : {};
   G.lastSpeaker = snap.speaker || null;
   $("chara-layer").innerHTML = "";
@@ -962,7 +1139,13 @@ function execCommand(node, idx) {
       break;
     }
     case "se": playSE(arg.split(/\s+/)[0]); break;
-    case "voice": playVoice(arg.split(/\s+/)[0]); break;
+    case "voice": G.pendingVoice = arg.split(/\s+/)[0]; playVoice(G.pendingVoice); break;
+    case "amb": playAmb(arg.split(/\s+/)[0]); break;
+    case "shake": screenShake(parseInt(arg, 10) || 500); break;
+    case "flash": screenFlash(arg); break;
+    case "fadeout": return screenFade(1, arg);
+    case "fadein": return screenFade(0, arg);
+    case "input": return askInput(arg);
     case "scene": {
       G.currentScene = arg || G.currentScene;
       const scene = G.parsedFiles[G.file].scenes.find((s) => s.index === idx);
@@ -1057,7 +1240,8 @@ function showChoices(node) {
   box.innerHTML = "";
   visible.forEach((opt, i) => {
     const btn = document.createElement("button");
-    btn.textContent = opt.text;
+    btn.textContent = expandVars(opt.text);
+    if (G.chosenSet.has(G.file + "|" + opt.text)) btn.classList.add("chosen"); // 選択済みの印
     btn.addEventListener("click", (e) => { e.stopPropagation(); selectChoice(i); });
     box.appendChild(btn);
   });
@@ -1069,7 +1253,9 @@ function selectChoice(i) {
   if (!opt || !G.choosing) return;
   G.choosing = false;
   $("choice-box").classList.add("hidden");
-  G.backlog.push({ name: "", text: "▶ " + opt.text, choice: true });
+  G.chosenSet.add(G.file + "|" + opt.text);
+  store("chosenSet", [...G.chosenSet]);
+  G.backlog.push({ name: "", text: "▶ " + expandVars(opt.text), choice: true });
 
   let goto = null;
   for (const eff of opt.effects) {
@@ -1095,8 +1281,11 @@ function showText(node, idx) {
   const textArea = $("text-area");
   $("next-indicator").classList.add("hidden");
 
+  const dispName = node.type === "say" ? expandVars(node.name) : "";
+  const dispText = expandVars(node.text);
+
   if (node.type === "say") {
-    namePlate.textContent = node.name;
+    namePlate.textContent = dispName;
     namePlate.style.color = nameColor(node.name);
     namePlate.classList.remove("hidden");
     textArea.classList.remove("narration");
@@ -1107,16 +1296,21 @@ function showText(node, idx) {
     textArea.classList.add("narration");
   }
 
-  // 既読管理
+  // 既読管理 + 既読テキストの色変え
   const readKey = G.file + "#" + idx;
   G.lastLineRead = G.readSet.has(readKey);
   if (!G.lastLineRead) { G.readSet.add(readKey); saveRead(); }
+  textArea.classList.toggle("read", G.lastLineRead);
 
-  G.backlog.push({ name: node.type === "say" ? node.name : "", text: node.text });
+  // このセリフに紐づくボイス(直前の @voice)をバックログにも残す
+  G.lastLineVoice = G.pendingVoice;
+  G.pendingVoice = null;
+
+  G.backlog.push({ name: dispName, text: dispText, voice: G.lastLineVoice });
   if (G.backlog.length > 400) G.backlog.shift();
 
   // 整形 + 文字送り
-  G.units = formatUnits(node.text);
+  G.units = formatUnits(dispText);
   G.totalSteps = G.units.reduce((a, u) => a + u.steps, 0);
   clearInterval(G.typeTimer);
   const speed = G.skipHeld ? 0 : G.settings.textSpeed;
@@ -1149,9 +1343,18 @@ function onTextComplete() {
   $("next-indicator").classList.remove("hidden");
   if (G.autoMode && !G.skipHeld) {
     clearTimeout(G.autoTimer);
-    G.autoTimer = setTimeout(() => {
-      if (G.autoMode && G.inGame && !isOverlayOpen()) advance();
-    }, G.settings.autoWait);
+    const go = () => {
+      clearTimeout(G.autoTimer);
+      G.autoTimer = setTimeout(() => {
+        if (G.autoMode && G.inGame && !isOverlayOpen()) advance();
+      }, G.settings.autoWait);
+    };
+    // ボイス再生中はその終了を待ってからオート送り
+    if (G.voice && !G.voice.ended && !G.voice.paused) {
+      G.voice.onended = () => { G.voice.onended = null; if (G.autoMode) go(); };
+    } else {
+      go();
+    }
   }
 }
 
@@ -1210,6 +1413,41 @@ function toggleDebug() {
   G.debugOn = !G.debugOn;
   $("debug-overlay").classList.toggle("hidden", !G.debugOn || !G.inGame);
   updateDebug();
+  if (G.debugOn) startDevReload(); else stopDevReload();
+  showToast(G.debugOn ? "デバッグ表示 ON(自動リロード有効)" : "デバッグ表示 OFF");
+}
+
+/* 開発モード: scenario の変更を検知して同じ位置のまま再読込(ブラウザのみ) */
+function startDevReload() {
+  if (FS || G.devTimer) return;
+  G.devRaw = {};
+  for (const f of Object.keys(G.parsedFiles)) {
+    if (f in G.rawFiles) continue;
+    fetch(f + "?_=" + Date.now(), { cache: "no-store" })
+      .then((r) => (r.ok ? r.text() : null))
+      .then((t) => { if (t != null) G.devRaw[f] = t; })
+      .catch(() => {});
+  }
+  G.devTimer = setInterval(devPoll, 1500);
+}
+function stopDevReload() { clearInterval(G.devTimer); G.devTimer = null; }
+
+async function devPoll() {
+  for (const f of Object.keys(G.parsedFiles)) {
+    if (f in G.rawFiles) continue;
+    let t;
+    try { const r = await fetch(f + "?_=" + Date.now(), { cache: "no-store" }); if (!r.ok) continue; t = await r.text(); }
+    catch (e) { continue; }
+    if (G.devRaw[f] === undefined) { G.devRaw[f] = t; continue; }
+    if (t === G.devRaw[f]) continue;
+    G.devRaw[f] = t;
+    const parsed = parseScenario(t);
+    G.parsedFiles[f] = parsed;
+    registerContent(f, parsed);
+    if (f === G.file) { G.nodes = parsed.nodes; if (G.pos > G.nodes.length) G.pos = G.nodes.length; }
+    showToast("⟳ " + f + " を再読込");
+    updateDebug();
+  }
 }
 
 function updateDebug() {
@@ -1490,7 +1728,7 @@ function captureKey(code) {
  * オーバーレイ
  * ========================================================= */
 function isOverlayOpen() {
-  return ["overlay-menu", "overlay-backlog", "overlay-saveload", "overlay-viewer", "overlay-file"]
+  return ["overlay-menu", "overlay-backlog", "overlay-saveload", "overlay-viewer", "overlay-file", "overlay-input"]
     .some((id) => !$(id).classList.contains("hidden"));
 }
 
@@ -1524,6 +1762,14 @@ function openBacklog() {
     t.className = "bl-text" + (entry.choice ? " bl-choice" : "");
     t.textContent = entry.text;
     div.appendChild(t);
+    if (entry.voice) {
+      const vb = document.createElement("button");
+      vb.className = "bl-voice";
+      vb.textContent = "♪";
+      vb.title = "ボイス再生";
+      vb.addEventListener("click", () => playVoice(entry.voice));
+      div.appendChild(vb);
+    }
     list.appendChild(div);
   }
   $("overlay-menu").classList.add("hidden");
@@ -1550,6 +1796,8 @@ function toggleFullscreen() {
  * ========================================================= */
 document.addEventListener("keydown", (e) => {
   if (G.keyCapture) { e.preventDefault(); captureKey(e.code); return; }
+  // 名前入力中はテキスト欄に任せる(Enter は askInput 側で処理)
+  if (!$("overlay-input").classList.contains("hidden")) return;
 
   const k = G.keys;
   const code = e.code;
@@ -1669,6 +1917,8 @@ $("overlay-menu").addEventListener("click", (e) => {
 
 $("btn-backlog-close").addEventListener("click", () => $("overlay-backlog").classList.add("hidden"));
 $("btn-saveload-close").addEventListener("click", () => $("overlay-saveload").classList.add("hidden"));
+$("btn-export").addEventListener("click", exportAll);
+$("import-file").addEventListener("change", (e) => { if (e.target.files[0]) importAll(e.target.files[0]); e.target.value = ""; });
 $("overlay-viewer").addEventListener("click", () => $("overlay-viewer").classList.add("hidden"));
 
 document.querySelectorAll(".btn-back").forEach((btn) =>

@@ -3,7 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d12">
 <title>Darask Novel Engine</title>
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -44,6 +46,10 @@
     <div id="mode-indicator" class="hidden"></div>
     <button id="btn-game-menu" title="メニュー (Esc)">≡</button>
     <div id="debug-overlay" class="hidden"></div>
+
+    <!-- 画面演出レイヤー -->
+    <div id="fx-flash"></div>
+    <div id="fx-fade"></div>
   </div>
 
   <!-- ========== CGギャラリー ========== -->
@@ -144,9 +150,24 @@
     <div class="backlog-panel">
       <header class="sub-header">
         <h2 id="saveload-title">セーブ</h2>
-        <button id="btn-saveload-close">閉じる</button>
+        <div class="sh-actions">
+          <button id="btn-export" title="全セーブを1ファイルに書き出す">書き出し</button>
+          <label class="import-btn" title="書き出したファイルを読み込む">読み込み
+            <input type="file" id="import-file" accept=".json" hidden>
+          </label>
+          <button id="btn-saveload-close">閉じる</button>
+        </div>
       </header>
       <div id="slot-grid" class="slot-grid"></div>
+    </div>
+  </div>
+
+  <!-- 名前入力 -->
+  <div id="overlay-input" class="overlay hidden">
+    <div class="input-panel">
+      <p id="input-prompt"></p>
+      <input type="text" id="input-field" maxlength="16" autocomplete="off">
+      <button id="input-ok">決定</button>
     </div>
   </div>
 
@@ -168,6 +189,12 @@
   <div id="toast" class="hidden"></div>
 </div>
 
+<script>
+  // PWA(オフライン対応)。http(s) のときだけ登録し、exe(app://)や file:// では無効。
+  if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  }
+</script>
 <script src="engine.js"></script>
 </body>
 </html>

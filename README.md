@@ -336,15 +336,14 @@ exe と**同じフォルダ**に `scenario.txt` や `bg/` `chara/` `bgm/` など
 
 ---
 
-## CI/CD(自動デプロイ・自動ビルド)
+## CI/CD(Web版の自動デプロイ)
 
-GitHub に push すると自動で動くワークフローを2つ同梱しています。
-
-### Web 版を Cloudflare Pages へ自動デプロイ
+`main` に push するたびに Web 版を Cloudflare Pages へ自動デプロイする
+ワークフローを同梱しています。
 
 [.github/workflows/deploy-pages.yml](.github/workflows/deploy-pages.yml)
 
-`main` に push するたびに Cloudflare Pages へデプロイします。事前準備:
+事前準備:
 
 1. Cloudflare ダッシュボード → **Workers & Pages** → Pages プロジェクト
    `darask-novel-engine` を作成(Direct Upload)。
@@ -355,17 +354,9 @@ GitHub に push すると自動で動くワークフローを2つ同梱してい
 > GitHub Actions を使わず、Cloudflare Pages の「Git 連携」でこのリポジトリを
 > 直接つないでもOKです(ビルドコマンドなし・出力ディレクトリ `/`)。
 
-### Windows exe を自動ビルドして Release に添付
-
-[.github/workflows/build-windows.yml](.github/workflows/build-windows.yml)
-
-`v1.0.0` のようなタグを push すると、exe をビルドして GitHub Release に
-自動添付します(手動実行も可)。
-
-```
-git tag v1.0.0
-git push origin v1.0.0
-```
+> exe はエンジン自体には不要なため、自動ビルドは用意していません。
+> 必要なときだけ手元で `npm run dist` を実行してください
+> ([ビルド方法](#ビルド方法exe-を作る))。
 
 ---
 

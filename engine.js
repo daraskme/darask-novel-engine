@@ -103,6 +103,7 @@ const G = {
   inGame: false,
   keyCapture: null,
   debugOn: false,
+  sceneReplay: false,   // シーン鑑賞: 該当シーンだけ再生するモード
 
   backlog: [],
   settingsReturn: "title",
@@ -990,6 +991,7 @@ function toTitle() {
   G.waiting = false;
   G.inGame = false;
   G.choosing = false;
+  G.sceneReplay = false;
   G.chara = {};
   G.lastSpeaker = null;
   renderChara();
@@ -1023,10 +1025,11 @@ function makeSnapshot(index) {
   };
 }
 
-async function restoreSnapshot(snap) {
+async function restoreSnapshot(snap, replay) {
   const parsed = await loadFile(snap.file);
   if (!parsed) { showToast("ファイルが見つかりません: " + snap.file); return false; }
 
+  G.sceneReplay = !!replay;
   stopAuto();
   endSkip();
   stopVoice();
@@ -1090,6 +1093,13 @@ function advance() {
   while (G.pos < G.nodes.length) {
     const idx = G.pos;
     const node = G.nodes[idx];
+
+    // シーン鑑賞中は、次のシーン境界・選択肢に来たらそのシーンだけで終了する
+    if (G.sceneReplay && ((node.type === "cmd" && node.cmd === "scene") || node.type === "choice")) {
+      endSceneReplay();
+      return;
+    }
+
     G.pos = idx + 1;
 
     if (node.type === "cmd") {
@@ -1104,7 +1114,31 @@ function advance() {
     showText(node, idx);
     return;
   }
+  if (G.sceneReplay) { endSceneReplay(); return; } // ファイル終端でも終了
   endStory();
+}
+
+/* シーン鑑賞の再生を終えてシーン一覧へ戻る */
+function endSceneReplay() {
+  G.sceneReplay = false;
+  G.inGame = false;
+  stopAuto();
+  endSkip();
+  stopBGM(false);
+  stopAmb();
+  stopVoice();
+  resetFx();
+  clearInterval(G.typeTimer);
+  G.typing = false;
+  clearTimeout(G.waitTimer);
+  G.waiting = false;
+  G.chara = {};
+  renderChara();
+  $("cg-img").classList.add("hidden");
+  $("choice-box").classList.add("hidden");
+  $("debug-overlay").classList.add("hidden");
+  showToast("― シーン終了 ―");
+  openScenes();
 }
 
 function execCommand(node, idx) {
@@ -1165,10 +1199,14 @@ function execCommand(node, idx) {
       break;
     }
     case "ending":
+      if (G.sceneReplay) { endSceneReplay(); return true; }
       markEnding(arg || "エンディング");
       endStory();
       return true;
-    case "end": endStory(); return true;
+    case "end":
+      if (G.sceneReplay) { endSceneReplay(); return true; }
+      endStory();
+      return true;
     case "wait": {
       if (G.skipHeld) break;
       const ms = parseInt(arg, 10) || 0;
@@ -1187,6 +1225,7 @@ function execCommand(node, idx) {
 
 /* ラベル goto / ファイル jump 共通の遷移解決 */
 function doGoto(target) {
+  if (G.sceneReplay) { endSceneReplay(); return; }
   target = target.replace(/^>/, "");
   if (/\.txt$/i.test(target)) { doJump(target); return; }
   const labels = G.parsedFiles[G.file].labels || {};
@@ -1195,6 +1234,7 @@ function doGoto(target) {
 }
 
 async function doJump(file) {
+  if (G.sceneReplay) { endSceneReplay(); return; }
   G.waiting = true;
   const parsed = await loadFile(file);
   G.waiting = false;
@@ -1612,7 +1652,7 @@ function openScenes() {
     const snap = G.sceneSnaps[scene.file + "|" + scene.title];
     if (snap) {
       btn.textContent = `${String(i + 1).padStart(2, "0")}. ${scene.title}`;
-      btn.addEventListener("click", () => restoreSnapshot(snap));
+      btn.addEventListener("click", () => restoreSnapshot(snap, true)); // 該当シーンだけ再生
     } else {
       btn.classList.add("locked");
       btn.textContent = `${String(i + 1).padStart(2, "0")}. ？？？`;

@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Darask Novel Engine</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -20,6 +20,7 @@
         <button data-action="continue" id="btn-continue">つづきから</button>
         <button data-action="gallery">CGギャラリー</button>
         <button data-action="scenes">シーン鑑賞</button>
+        <button data-action="endings">エンディング</button>
         <button data-action="settings">設定</button>
       </nav>
     </div>
@@ -28,6 +29,7 @@
   <!-- ========== ゲーム画面 ========== -->
   <div id="screen-game" class="screen hidden">
     <img id="bg-img" alt="">
+    <img id="bg-next" class="hidden" alt="">
     <div id="chara-layer"></div>
     <img id="cg-img" class="hidden" alt="">
 
@@ -41,6 +43,7 @@
 
     <div id="mode-indicator" class="hidden"></div>
     <button id="btn-game-menu" title="メニュー (Esc)">≡</button>
+    <div id="debug-overlay" class="hidden"></div>
   </div>
 
   <!-- ========== CGギャラリー ========== -->
@@ -59,6 +62,15 @@
       <button class="btn-back">← 戻る</button>
     </header>
     <div id="scene-list" class="list"></div>
+  </div>
+
+  <!-- ========== エンディング一覧 ========== -->
+  <div id="screen-endings" class="screen sub-screen hidden">
+    <header class="sub-header">
+      <h2>エンディング <span id="ending-rate"></span></h2>
+      <button class="btn-back">← 戻る</button>
+    </header>
+    <div id="ending-list" class="list"></div>
   </div>
 
   <!-- ========== 設定 ========== -->
@@ -85,6 +97,14 @@
         <label>効果音音量
           <input type="range" id="opt-se-vol" min="0" max="100" step="5">
           <span class="opt-val" id="val-se-vol"></span>
+        </label>
+        <label>ボイス音量
+          <input type="range" id="opt-voice-vol" min="0" max="100" step="5">
+          <span class="opt-val" id="val-voice-vol"></span>
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" id="opt-skip-unread">
+          <span>未読もスキップする(OFFなら既読のみ)</span>
         </label>
       </section>
       <section>
@@ -116,6 +136,17 @@
         <button id="btn-backlog-close">閉じる</button>
       </header>
       <div id="backlog-list"></div>
+    </div>
+  </div>
+
+  <!-- セーブ / ロード -->
+  <div id="overlay-saveload" class="overlay hidden">
+    <div class="backlog-panel">
+      <header class="sub-header">
+        <h2 id="saveload-title">セーブ</h2>
+        <button id="btn-saveload-close">閉じる</button>
+      </header>
+      <div id="slot-grid" class="slot-grid"></div>
     </div>
   </div>
 

@@ -30,7 +30,8 @@
       "chara/**",
       "cg/**",
       "bgm/**",
-      "se/**"
+      "se/**",
+      "voice/**"
     ],
     "win": {
       "target": "portable",

@@ -57,6 +57,8 @@ const DEFAULT_SETTINGS = {
   seVol: 80,
   voiceVol: 90,
   skipUnread: 0,     // 1: 未読もスキップ / 0: 既読のみスキップ
+  msgAlpha: 85,      // メッセージウィンドウ不透明度 %
+  textScale: 100,    // 文字サイズ %
 };
 
 const NAME_COLORS = [
@@ -97,6 +99,8 @@ const G = {
   autoTimer: null,
   skipHeld: false,
   skipTimer: null,
+  ffwd: false,         // 次の選択肢まで早送り
+  ffwdTimer: null,
   uiHidden: false,
   lastLineRead: false, // 直近に表示した行が既読だったか(既読スキップ判定用)
 
@@ -118,6 +122,8 @@ const G = {
   readSet: new Set(),        // 既読行 "file#idx"
   endingRegistry: [],        // [{file, name}]
   unlockedEndings: new Set(),
+  bgmRegistry: [],           // 登場する BGM ファイル(音楽鑑賞の枠)
+  heardBGM: new Set(),       // 一度でも再生された BGM
   titleBg: "",
 
   bgm: null,
@@ -141,6 +147,7 @@ const screens = {
   gallery: $("screen-gallery"),
   scenes: $("screen-scenes"),
   endings: $("screen-endings"),
+  music: $("screen-music"),
   settings: $("screen-settings"),
 };
 
@@ -176,25 +183,59 @@ async function initStorage() {
   }
 }
 
-function persistKey(key) {
-  const val = CACHE[key];
-  if (FS) {
-    // セーブスロットは即書き込み、頻繁に更新される他キーはデバウンス
-    if (key.startsWith("slot_")) { FS.write(key + ".json", JSON.stringify(val)); }
-    else {
-      clearTimeout(flushTimers[key]);
-      flushTimers[key] = setTimeout(() => FS.write(key + ".json", JSON.stringify(val)), 250);
-    }
-  } else {
-    try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(val)); } catch (e) {}
+const lastWriteAt = {};
+let storageWarned = false;
+
+function warnStorageFull() {
+  if (storageWarned) return;
+  storageWarned = true;
+  showToast("⚠ データを保存できません(ストレージ容量不足の可能性)");
+}
+
+/* 実際の書き込み。失敗時は false(localStorage の容量超過など) */
+function writeKey(key) {
+  const data = JSON.stringify(CACHE[key]);
+  lastWriteAt[key] = Date.now();
+  if (FS) { FS.write(key + ".json", data); return true; }
+  try {
+    localStorage.setItem(STORAGE_PREFIX + key, data);
+    return true;
+  } catch (e) {
+    warnStorageFull();
+    return false;
   }
 }
 
-function store(key, val) { CACHE[key] = val; persistKey(key); }
+/* セーブスロットは即時書き込み。頻繁に更新されるキー(既読など)は
+ * 「最大 800ms に1回・ただし必ず書かれる」スロットリングにする
+ * (毎回リセットされるデバウンスだと、スキップ中に一度も書かれない) */
+function persistKey(key) {
+  if (key.startsWith("slot_")) {
+    clearTimeout(flushTimers[key]);
+    delete flushTimers[key];
+    return writeKey(key);
+  }
+  const since = Date.now() - (lastWriteAt[key] || 0);
+  if (since >= 800) {
+    clearTimeout(flushTimers[key]);
+    delete flushTimers[key];
+    writeKey(key);
+  } else if (!flushTimers[key]) {
+    flushTimers[key] = setTimeout(() => {
+      delete flushTimers[key];
+      writeKey(key);
+    }, 800 - since);
+  }
+  return true;
+}
+
+function store(key, val) { CACHE[key] = val; return persistKey(key); }
 function restore(key, fallback) { return key in CACHE ? CACHE[key] : fallback; }
 function removeKey(key) {
   delete CACHE[key];
-  if (FS) { clearTimeout(flushTimers[key]); FS.remove(key + ".json"); }
+  clearTimeout(flushTimers[key]);
+  delete flushTimers[key];
+  if (FS) { FS.remove(key + ".json"); }
   else { try { localStorage.removeItem(STORAGE_PREFIX + key); } catch (e) {} }
 }
 
@@ -217,6 +258,8 @@ function importAll(file) {
     if (!data || typeof data !== "object") { showToast("形式が違います"); return; }
     for (const [k, v] of Object.entries(data)) store(k, v);
     loadPersistent();
+    applyDisplaySettings();
+    syncSettingsUI();
     updateContinueButton();
     showToast("読み込みました");
     if (!$("overlay-saveload").classList.contains("hidden")) buildSlotGrid();
@@ -234,6 +277,9 @@ function loadPersistent() {
   G.endingRegistry = restore("endingRegistry", []);
   G.unlockedEndings = new Set(restore("unlockedEndings", []));
   G.chosenSet = new Set(restore("chosenSet", []));
+  // bgmRegistry は毎起動時のクロールで再構築する(永続化すると、シナリオから
+  // 削除した BGM が「？？？」として永久に残ってしまう)
+  G.heardBGM = new Set(restore("heardBGM", []));
 }
 
 function savePersistent() {
@@ -245,6 +291,7 @@ function savePersistent() {
   store("sceneSnaps", G.sceneSnaps);
   store("endingRegistry", G.endingRegistry);
   store("unlockedEndings", [...G.unlockedEndings]);
+  store("heardBGM", [...G.heardBGM]);
 }
 // 既読は量が多くなるので個別に保存
 function saveRead() { store("readSet", [...G.readSet]); }
@@ -522,12 +569,19 @@ function registerContent(file, parsed) {
       changed = true;
     }
   }
-  // エンディング登録(@ending 名前)
+  // エンディング登録(@ending 名前) / BGM 登録(音楽鑑賞の枠)
   for (const n of parsed.nodes) {
-    if (n.type === "cmd" && n.cmd === "ending") {
+    if (n.type !== "cmd") continue;
+    if (n.cmd === "ending") {
       const name = n.arg || "エンディング";
       if (!G.endingRegistry.some((e) => e.file === file && e.name === name)) {
         G.endingRegistry.push({ file, name });
+        changed = true;
+      }
+    } else if (n.cmd === "bgm") {
+      const f = n.arg.split(/\s+/)[0];
+      if (f && f.toLowerCase() !== "stop" && !G.bgmRegistry.includes(f)) {
+        G.bgmRegistry.push(f);
         changed = true;
       }
     }
@@ -586,9 +640,17 @@ async function crawlFiles() {
   }
 }
 
+/* ウィンドウ不透明度・文字サイズを CSS 変数へ反映 */
+function applyDisplaySettings() {
+  const root = document.documentElement;
+  root.style.setProperty("--msg-alpha", String(G.settings.msgAlpha / 100));
+  root.style.setProperty("--text-scale", String(G.settings.textScale / 100));
+}
+
 async function boot() {
   await initStorage();
   loadPersistent();
+  applyDisplaySettings();
   syncSettingsUI();
   updateContinueButton();
   const parsed = await loadFile(ENTRY_FILE);
@@ -670,11 +732,14 @@ function setImage(imgEl, dir, file) {
   imgEl.src = ASSET_DIR[dir] + file;
 }
 
+/* スキップ中/早送り中は演出を省略する */
+function isFast() { return G.skipHeld || G.ffwd; }
+
 /* 背景変更(オプションでクロスフェード) */
 function changeBg(file, fadeMs) {
   G.curBg = file;
   const cur = $("bg-img");
-  if (!fadeMs || G.skipHeld) { setImage(cur, "bg", file); return; }
+  if (!fadeMs || isFast()) { setImage(cur, "bg", file); return; }
 
   const next = $("bg-next");
   next.onerror = () => { next.onerror = null; next.src = placeholderImage(file); };
@@ -708,14 +773,15 @@ function playBGM(file, fade) {
     const a = new Audio(ASSET_DIR.bgm + target);
     a.loop = true;
     const maxVol = G.settings.bgmVol / 100;
-    a.volume = fade && !G.skipHeld ? 0 : maxVol;
+    a.volume = fade && !isFast() ? 0 : maxVol;
     a.play().catch(() => {});
     G.bgm = a;
     G.bgmName = target;
-    if (fade && !G.skipHeld) rampVolume(a, maxVol, FADE_MS);
+    if (!G.heardBGM.has(target)) { G.heardBGM.add(target); store("heardBGM", [...G.heardBGM]); }
+    if (fade && !isFast()) rampVolume(a, maxVol, FADE_MS);
   };
 
-  if (G.bgm && fade && !G.skipHeld) {
+  if (G.bgm && fade && !isFast()) {
     const old = G.bgm;
     rampVolume(old, 0, FADE_MS, () => old.pause());
     G.bgm = null;
@@ -741,7 +807,7 @@ function rampVolume(audio, to, ms, done) {
 function stopBGM(fade) {
   clearInterval(G.bgmFadeTimer);
   if (G.bgm) {
-    if (fade && !G.skipHeld) { const a = G.bgm; rampVolume(a, 0, FADE_MS, () => a.pause()); }
+    if (fade && !isFast()) { const a = G.bgm; rampVolume(a, 0, FADE_MS, () => a.pause()); }
     else G.bgm.pause();
     G.bgm = null;
   }
@@ -806,7 +872,7 @@ function screenFlash(arg) {
 function screenFade(to, arg) {
   const ms = parseInt(arg, 10) || FADE_MS;
   const el = $("fx-fade");
-  if (G.skipHeld) { el.style.transition = "none"; el.style.opacity = String(to); return false; }
+  if (isFast()) { el.style.transition = "none"; el.style.opacity = String(to); return false; }
   el.style.transition = `opacity ${ms}ms ease`;
   el.style.opacity = String(to);
   G.waiting = true;
@@ -919,7 +985,7 @@ function renderChara() {
       layer.appendChild(slot);
       // フェードイン + スライドイン
       slot.classList.add("enter");
-      if (!G.skipHeld) requestAnimationFrame(() => slot.classList.remove("enter"));
+      if (!isFast()) requestAnimationFrame(() => slot.classList.remove("enter"));
       else slot.classList.remove("enter");
     } else {
       slot.className = "chara-slot pos-" + st.pos;
@@ -946,7 +1012,7 @@ function renderChara() {
   // 退場(フェードアウト後に削除)
   for (const name in existing) {
     const slot = existing[name];
-    if (G.skipHeld) { slot.remove(); continue; }
+    if (isFast()) { slot.remove(); continue; }
     slot.classList.add("leave");
     slot.addEventListener("transitionend", () => slot.remove(), { once: true });
     setTimeout(() => slot.remove(), FADE_MS + 120);
@@ -980,15 +1046,24 @@ function resetFx() {
   $("screen-game").classList.remove("fx-shake");
 }
 
-function toTitle() {
+/* 進行中のモード・タイマー・音声をすべて止める(画面遷移の共通前処理)。
+ * ここに一元化しておかないと、遷移経路ごとに止め忘れが発生する */
+function haltPlayback() {
   stopAuto();
   endSkip();
-  stopBGM(false);
-  stopAmb();
+  endFfwd();
   stopVoice();
-  resetFx();
   clearTimeout(G.waitTimer);
   G.waiting = false;
+  clearInterval(G.typeTimer);
+  G.typing = false;
+}
+
+function toTitle() {
+  haltPlayback();
+  stopBGM(false);
+  stopAmb();
+  resetFx();
   G.inGame = false;
   G.choosing = false;
   G.sceneReplay = false;
@@ -1025,18 +1100,17 @@ function makeSnapshot(index) {
   };
 }
 
-async function restoreSnapshot(snap, replay) {
+async function restoreSnapshot(snap, replay, seedBacklog) {
   const parsed = await loadFile(snap.file);
   if (!parsed) { showToast("ファイルが見つかりません: " + snap.file); return false; }
+  // シナリオが変更されて位置が範囲外になった古いセーブは、即終了扱いにせず断る
+  if (snap.index > parsed.nodes.length) {
+    showToast("セーブ位置がシナリオと一致しません(シナリオ変更の可能性)");
+    return false;
+  }
 
   G.sceneReplay = !!replay;
-  stopAuto();
-  endSkip();
-  stopVoice();
-  clearTimeout(G.waitTimer);
-  clearInterval(G.typeTimer);
-  G.typing = false;
-  G.waiting = false;
+  haltPlayback();
   G.choosing = false;
   $("choice-box").classList.add("hidden");
 
@@ -1045,7 +1119,8 @@ async function restoreSnapshot(snap, replay) {
   G.flags = { ...snap.flags };
   G.pos = snap.index;
   G.shownIndex = -1;
-  G.backlog = [];
+  G.backlog = seedBacklog || []; // 巻き戻し時はそれ以前の履歴を引き継ぐ
+  G.pendingVoice = snap.voice || null; // 行に紐づくボイスを復元(巻き戻し用)
   G.uiHidden = false;
   G.autoMode = false;
   G.currentScene = snap.scene || "";
@@ -1075,6 +1150,7 @@ async function restoreSnapshot(snap, replay) {
 
   G.inGame = true;
   showScreen("game");
+  if (snap.voice) playVoice(snap.voice); // 巻き戻した行のボイスを再生し直す
   advance();
   return true;
 }
@@ -1122,16 +1198,10 @@ function advance() {
 function endSceneReplay() {
   G.sceneReplay = false;
   G.inGame = false;
-  stopAuto();
-  endSkip();
+  haltPlayback();
   stopBGM(false);
   stopAmb();
-  stopVoice();
   resetFx();
-  clearInterval(G.typeTimer);
-  G.typing = false;
-  clearTimeout(G.waitTimer);
-  G.waiting = false;
   G.chara = {};
   renderChara();
   $("cg-img").classList.add("hidden");
@@ -1181,6 +1251,7 @@ function execCommand(node, idx) {
     case "fadein": return screenFade(0, arg);
     case "input": return askInput(arg);
     case "scene": {
+      if (G.ffwd) { endFfwd(); G.pos = idx; return true; } // 早送りは章境界で止める
       G.currentScene = arg || G.currentScene;
       const scene = G.parsedFiles[G.file].scenes.find((s) => s.index === idx);
       if (scene) {
@@ -1199,16 +1270,18 @@ function execCommand(node, idx) {
       break;
     }
     case "ending":
+      if (G.ffwd) { endFfwd(); G.pos = idx; return true; } // 終端の直前で止める
       if (G.sceneReplay) { endSceneReplay(); return true; }
       markEnding(arg || "エンディング");
       endStory();
       return true;
     case "end":
+      if (G.ffwd) { endFfwd(); G.pos = idx; return true; }
       if (G.sceneReplay) { endSceneReplay(); return true; }
       endStory();
       return true;
     case "wait": {
-      if (G.skipHeld) break;
+      if (isFast()) break;
       const ms = parseInt(arg, 10) || 0;
       if (ms > 0) {
         G.waiting = true;
@@ -1343,17 +1416,22 @@ function showText(node, idx) {
   textArea.classList.toggle("read", G.lastLineRead);
 
   // このセリフに紐づくボイス(直前の @voice)をバックログにも残す
-  G.lastLineVoice = G.pendingVoice;
+  const voiceForLine = G.pendingVoice;
+  G.lastLineVoice = voiceForLine;
   G.pendingVoice = null;
 
-  G.backlog.push({ name: dispName, text: dispText, voice: G.lastLineVoice });
+  // 巻き戻し用: この行を表示した時点の状態(ボイス込み)を添えておく
+  G.backlog.push({
+    name: dispName, text: dispText, voice: voiceForLine,
+    snap: { ...makeSnapshot(idx), voice: voiceForLine },
+  });
   if (G.backlog.length > 400) G.backlog.shift();
 
   // 整形 + 文字送り
   G.units = formatUnits(dispText);
   G.totalSteps = G.units.reduce((a, u) => a + u.steps, 0);
   clearInterval(G.typeTimer);
-  const speed = G.skipHeld ? 0 : G.settings.textSpeed;
+  const speed = isFast() ? 0 : G.settings.textSpeed;
 
   if (speed <= 0) {
     renderUnits(textArea, G.units, G.totalSteps);
@@ -1381,7 +1459,7 @@ function finishTyping() {
 
 function onTextComplete() {
   $("next-indicator").classList.remove("hidden");
-  if (G.autoMode && !G.skipHeld) {
+  if (G.autoMode && !isFast()) {
     clearTimeout(G.autoTimer);
     const go = () => {
       clearTimeout(G.autoTimer);
@@ -1400,6 +1478,7 @@ function onTextComplete() {
 
 /* ---------- オート / スキップ ---------- */
 function toggleAuto() {
+  endFfwd(); // オートと早送りは同時に動かさない
   G.autoMode = !G.autoMode;
   updateModeIndicator();
   if (G.autoMode && !G.typing && !G.choosing) onTextComplete();
@@ -1432,9 +1511,35 @@ function endSkip() {
   updateModeIndicator();
 }
 
+/* 次の選択肢まで早送り(既読/未読を問わず)。
+ * 選択肢のほか、シーン境界(@scene)・物語の終端(@end/@ending)でも停止する */
+function startFfwd() {
+  if (G.ffwd || !G.inGame || G.choosing) return;
+  endSkip();
+  stopAuto();
+  // 進行中の @wait は打ち切って即座に早送りへ
+  clearTimeout(G.waitTimer);
+  G.waiting = false;
+  G.ffwd = true;
+  updateModeIndicator();
+  G.ffwdTimer = setInterval(() => {
+    if (!G.inGame || G.choosing || isOverlayOpen()) { endFfwd(); return; }
+    if (G.typing) finishTyping();
+    else advance();
+  }, 40);
+}
+
+function endFfwd() {
+  if (!G.ffwd) return;
+  G.ffwd = false;
+  clearInterval(G.ffwdTimer);
+  updateModeIndicator();
+}
+
 function updateModeIndicator() {
   const el = $("mode-indicator");
-  if (G.skipHeld) { el.textContent = "▶▶ SKIP"; el.classList.remove("hidden"); }
+  if (G.ffwd) { el.textContent = "▶▶ 選択肢まで"; el.classList.remove("hidden"); }
+  else if (G.skipHeld) { el.textContent = "▶▶ SKIP"; el.classList.remove("hidden"); }
   else if (G.autoMode) { el.textContent = "▶ AUTO"; el.classList.remove("hidden"); }
   else el.classList.add("hidden");
 }
@@ -1443,7 +1548,7 @@ function updateModeIndicator() {
 function toggleUI(forceShow) {
   G.uiHidden = forceShow === true ? false : !G.uiHidden;
   $("message-window").classList.toggle("hidden", G.uiHidden);
-  $("mode-indicator").classList.toggle("hidden", G.uiHidden || (!G.autoMode && !G.skipHeld));
+  $("mode-indicator").classList.toggle("hidden", G.uiHidden || (!G.autoMode && !G.skipHeld && !G.ffwd));
   $("btn-game-menu").classList.toggle("hidden", G.uiHidden);
   if (G.choosing) $("choice-box").classList.toggle("hidden", G.uiHidden);
 }
@@ -1514,6 +1619,45 @@ function updateDebug() {
 function slotKey(id) { return "slot_" + id; }
 function readSlot(id) { return restore(slotKey(id), null); }
 
+/* 現在の画面(背景+立ち絵+CG)を縮小してサムネイル化 */
+function captureThumb() {
+  try {
+    const W = 320, H = 180;
+    const cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, W, H);
+
+    const drawCover = (img) => {
+      if (!img || !img.complete || !img.naturalWidth) return;
+      const s = Math.max(W / img.naturalWidth, H / img.naturalHeight);
+      const w = img.naturalWidth * s, h = img.naturalHeight * s;
+      ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+    };
+
+    drawCover($("bg-img"));
+    // クロスフェード中は新しい背景が bg-next に載っている
+    if (!$("bg-next").classList.contains("hidden")) drawCover($("bg-next"));
+    // 立ち絵(位置と高さ90%を再現)
+    const posX = { left: 0.25, center: 0.5, right: 0.75 };
+    for (const slot of $("chara-layer").children) {
+      const pos = slot.className.match(/pos-(\w+)/);
+      const cx = W * (posX[pos ? pos[1] : "center"] || 0.5);
+      for (const img of slot.querySelectorAll("img")) {
+        if (img.classList.contains("hidden") || !img.complete || !img.naturalWidth) continue;
+        const h = H * 0.9;
+        const w = h * (img.naturalWidth / img.naturalHeight);
+        ctx.drawImage(img, cx - w / 2, H - h, w, h);
+      }
+    }
+    if (!$("cg-img").classList.contains("hidden")) drawCover($("cg-img"));
+    return cv.toDataURL("image/jpeg", 0.6);
+  } catch (e) {
+    return null; // 画像が取得できない環境ではサムネイルなしで保存
+  }
+}
+
 function latestSlot() {
   let best = null;
   for (const id of SAVE_SLOTS) {
@@ -1523,11 +1667,17 @@ function latestSlot() {
   return best;
 }
 
-function quickSave() {
-  if (!G.inGame || G.shownIndex < 0) return;
-  store(slotKey("q"), makeSnapshot(G.shownIndex));
+/* スロットへ保存(クイック/画面共通)。書き込み失敗も通知する */
+function saveToSlot(id, label) {
+  if (!G.inGame || G.shownIndex < 0) return false;
+  const ok = store(slotKey(id), { ...makeSnapshot(G.shownIndex), thumb: captureThumb() });
   updateContinueButton();
-  showToast("クイックセーブしました");
+  showToast(ok === false ? "⚠ セーブを書き込めませんでした(容量不足)" : label + "にセーブしました");
+  return ok !== false;
+}
+
+function quickSave() {
+  saveToSlot("q", "クイックセーブ");
 }
 
 function quickLoad() {
@@ -1563,23 +1713,39 @@ function buildSlotGrid() {
     cell.className = "slot" + (s ? "" : " empty");
     const label = id === "q" ? "クイック" : "スロット " + id;
 
-    let inner = `<div class="slot-name">${label}</div>`;
+    // DOM を組み立てて挿入する(セーブデータはインポート/外部ファイル由来の可能性が
+    // あるため、innerHTML への文字列埋め込みはしない)
+    const addDiv = (parent, cls, text) => {
+      const el = document.createElement("div");
+      el.className = cls;
+      if (text !== undefined) el.textContent = text;
+      parent.appendChild(el);
+      return el;
+    };
+    // サムネイルは canvas 由来の data:image のみ許可
+    if (s && typeof s.thumb === "string" && /^data:image\/(jpeg|png);base64,/.test(s.thumb)) {
+      const img = document.createElement("img");
+      img.className = "slot-thumb";
+      img.alt = "";
+      img.src = s.thumb;
+      cell.appendChild(img);
+    }
+    const info = addDiv(cell, "slot-info");
+    addDiv(info, "slot-name", label);
     if (s) {
       const d = new Date(s.savedAt);
       const dstr = isNaN(d) ? "" : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-      inner += `<div class="slot-scene">${escapeHtml(s.scene || "(シーン不明)")}</div><div class="slot-date">${dstr}</div>`;
+      addDiv(info, "slot-scene", s.scene || "(シーン不明)");
+      addDiv(info, "slot-date", dstr);
     } else {
-      inner += `<div class="slot-scene slot-dim">― 空き ―</div>`;
+      addDiv(info, "slot-scene slot-dim", "― 空き ―");
     }
-    cell.innerHTML = inner;
 
     if (G.saveMode) {
       if (!G.inGame) { cell.classList.add("disabled"); }
       else cell.addEventListener("click", () => {
-        store(slotKey(id), makeSnapshot(G.shownIndex));
-        updateContinueButton();
+        saveToSlot(id, label);
         buildSlotGrid();
-        showToast(label + " にセーブしました");
       });
     } else {
       if (s) {
@@ -1604,10 +1770,6 @@ function buildSlotGrid() {
     }
     grid.appendChild(cell);
   }
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 /* =========================================================
@@ -1681,6 +1843,40 @@ function openEndings() {
   showScreen("endings");
 }
 
+/* ---------- 音楽鑑賞 ---------- */
+function openMusic() {
+  const list = $("music-list");
+  list.innerHTML = "";
+  if (G.bgmRegistry.length === 0) {
+    list.innerHTML = '<div class="empty">このシナリオに BGM はありません (@bgm で登録されます)</div>';
+  }
+  G.bgmRegistry.forEach((file, i) => {
+    const btn = document.createElement("button");
+    btn.className = "scene-item music-item";
+    const name = file.replace(/\.[^.]+$/, "");
+    if (G.heardBGM.has(file)) {
+      btn.textContent = `${String(i + 1).padStart(2, "0")}. ${name}`;
+      btn.addEventListener("click", () => {
+        // 再生中かどうかはエンジン状態(G.bgmName)から導出する
+        const wasPlaying = G.bgmName === file;
+        list.querySelectorAll(".playing").forEach((el) => el.classList.remove("playing"));
+        stopBGM(false);
+        if (!wasPlaying) { playBGM(file, false); btn.classList.add("playing"); }
+      });
+    } else {
+      btn.classList.add("locked");
+      btn.textContent = `${String(i + 1).padStart(2, "0")}. ？？？`;
+    }
+    list.appendChild(btn);
+  });
+  showScreen("music");
+}
+
+function closeMusic() {
+  stopBGM(false);
+  showScreen("title");
+}
+
 /* =========================================================
  * 設定画面
  * ========================================================= */
@@ -1703,6 +1899,8 @@ function syncSettingsUI() {
   $("opt-bgm-vol").value = s.bgmVol;
   $("opt-se-vol").value = s.seVol;
   $("opt-voice-vol").value = s.voiceVol;
+  $("opt-msg-alpha").value = s.msgAlpha;
+  $("opt-text-scale").value = s.textScale;
   $("opt-skip-unread").checked = !!s.skipUnread;
   updateSettingLabels();
 }
@@ -1714,6 +1912,8 @@ function updateSettingLabels() {
   $("val-bgm-vol").textContent = s.bgmVol + "%";
   $("val-se-vol").textContent = s.seVol + "%";
   $("val-voice-vol").textContent = s.voiceVol + "%";
+  $("val-msg-alpha").textContent = s.msgAlpha + "%";
+  $("val-text-scale").textContent = s.textScale + "%";
 }
 
 function keyDisplayName(code) {
@@ -1788,9 +1988,17 @@ function openBacklog() {
   stopAuto();
   const list = $("backlog-list");
   list.innerHTML = "";
-  for (const entry of G.backlog) {
+  G.backlog.forEach((entry, bi) => {
     const div = document.createElement("div");
     div.className = "backlog-entry";
+    if (entry.snap) {
+      div.classList.add("bl-jump");
+      div.title = "クリックでこの場面に戻る";
+      div.addEventListener("click", (e) => {
+        if (e.target.closest(".bl-voice")) return; // ♪ボタンは再生のみ
+        rollbackTo(bi);
+      });
+    }
     if (entry.name) {
       const n = document.createElement("div");
       n.className = "bl-name";
@@ -1811,10 +2019,18 @@ function openBacklog() {
       div.appendChild(vb);
     }
     list.appendChild(div);
-  }
+  });
   $("overlay-menu").classList.add("hidden");
   $("overlay-backlog").classList.remove("hidden");
   list.scrollTop = list.scrollHeight;
+}
+
+/* バックログの行から巻き戻す(それ以前の履歴は seedBacklog として引き継ぐ) */
+function rollbackTo(i) {
+  const entry = G.backlog[i];
+  if (!entry || !entry.snap) return;
+  $("overlay-backlog").classList.add("hidden");
+  restoreSnapshot(entry.snap, G.sceneReplay, G.backlog.slice(0, i));
 }
 
 let toastTimer = null;
@@ -1841,6 +2057,9 @@ document.addEventListener("keydown", (e) => {
 
   const k = G.keys;
   const code = e.code;
+
+  // キー押しっぱなしのリピートは読み進め系以外無視する(セーブ連打などを防ぐ)
+  if (e.repeat && code !== k.advance && code !== "Space" && code !== k.skip) return;
   if (["Space", "Enter", "ArrowUp", "ArrowDown"].includes(code)) e.preventDefault();
 
   if (code === k.fullscreen) { toggleFullscreen(); return; }
@@ -1848,6 +2067,10 @@ document.addEventListener("keydown", (e) => {
 
   if (!screens.settings.classList.contains("hidden")) {
     if (code === k.menu) closeSettings();
+    return;
+  }
+  if (!screens.music.classList.contains("hidden")) {
+    if (code === k.menu) closeMusic();
     return;
   }
   if (!screens.gallery.classList.contains("hidden") ||
@@ -1888,8 +2111,8 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  if (code === k.advance || code === "Space") { stopAuto(); advance(); }
-  else if (code === k.skip) startSkip();
+  if (code === k.advance || code === "Space") { stopAuto(); endFfwd(); advance(); }
+  else if (code === k.skip) { endFfwd(); startSkip(); }
   else if (code === k.auto) toggleAuto();
   else if (code === k.hide) toggleUI();
   else if (code === k.backlog) openBacklog();
@@ -1908,6 +2131,7 @@ $("screen-game").addEventListener("click", (e) => {
   if (G.uiHidden) { toggleUI(true); return; }
   if (G.choosing) return;
   stopAuto();
+  endFfwd();
   advance();
 });
 
@@ -1920,7 +2144,7 @@ document.addEventListener("wheel", (e) => {
   if (!G.inGame || isOverlayOpen()) return;
   if (screens.game.classList.contains("hidden")) return;
   if (e.deltaY < 0) openBacklog();
-  else if (!G.choosing) { stopAuto(); advance(); }
+  else if (!G.choosing) { stopAuto(); endFfwd(); advance(); }
 }, { passive: true });
 
 /* =========================================================
@@ -1935,6 +2159,7 @@ $("screen-title").addEventListener("click", (e) => {
     case "gallery": openGallery(); break;
     case "scenes": openScenes(); break;
     case "endings": openEndings(); break;
+    case "music": openMusic(); break;
     case "settings": openSettings("title"); break;
   }
 });
@@ -1948,6 +2173,7 @@ $("overlay-menu").addEventListener("click", (e) => {
     case "save": openSaveLoad(true); break;
     case "load": openSaveLoad(false); break;
     case "auto": toggleAuto(); $("overlay-menu").classList.add("hidden"); break;
+    case "ffwd": $("overlay-menu").classList.add("hidden"); startFfwd(); break;
     case "backlog": openBacklog(); break;
     case "settings": $("overlay-menu").classList.add("hidden"); openSettings("game"); break;
     case "title": closeAllOverlays(); toTitle(); break;
@@ -1964,6 +2190,7 @@ $("overlay-viewer").addEventListener("click", () => $("overlay-viewer").classLis
 document.querySelectorAll(".btn-back").forEach((btn) =>
   btn.addEventListener("click", () => {
     if (!screens.settings.classList.contains("hidden")) closeSettings();
+    else if (!screens.music.classList.contains("hidden")) closeMusic();
     else showScreen("title");
   }));
 
@@ -1975,11 +2202,13 @@ $("btn-reset-keys").addEventListener("click", () => {
 });
 
 [["opt-text-speed", "textSpeed"], ["opt-auto-wait", "autoWait"],
- ["opt-bgm-vol", "bgmVol"], ["opt-se-vol", "seVol"], ["opt-voice-vol", "voiceVol"]].forEach(([id, prop]) => {
+ ["opt-bgm-vol", "bgmVol"], ["opt-se-vol", "seVol"], ["opt-voice-vol", "voiceVol"],
+ ["opt-msg-alpha", "msgAlpha"], ["opt-text-scale", "textScale"]].forEach(([id, prop]) => {
   $(id).addEventListener("input", (e) => {
     G.settings[prop] = parseInt(e.target.value, 10);
     updateSettingLabels();
     if (prop === "bgmVol" && G.bgm) G.bgm.volume = G.settings.bgmVol / 100;
+    if (prop === "msgAlpha" || prop === "textScale") applyDisplaySettings();
     savePersistent();
   });
 });

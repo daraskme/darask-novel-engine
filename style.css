@@ -142,13 +142,17 @@ html, body {
 
 .chara-slot.dim { filter: brightness(.62) saturate(.85); }
 
+:root { --msg-alpha: .85; --text-scale: 1; }
+
 #message-window {
   position: absolute;
   z-index: 5;
   left: 3%; right: 3%; bottom: 3%;
   min-height: 27%;
   padding: 2.2% 3% 2.4%;
-  background: linear-gradient(180deg, rgba(10,12,22,.78), rgba(10,12,22,.9));
+  background: linear-gradient(180deg,
+    rgb(10 12 22 / calc(var(--msg-alpha) - 0.08)),
+    rgb(10 12 22 / var(--msg-alpha)));
   border: 1px solid rgba(150,165,230,.3);
   border-radius: 10px;
   backdrop-filter: blur(3px);
@@ -167,7 +171,7 @@ html, body {
 }
 
 #text-area {
-  font-size: clamp(14px, 2.1vw, 22px);
+  font-size: calc(clamp(14px, 2.1vw, 22px) * var(--text-scale));
   line-height: 1.9;
   min-height: 3.8em;
   white-space: pre-wrap;
@@ -523,13 +527,27 @@ html, body {
 .slot {
   position: relative;
   min-height: 4.5em;
-  padding: 1em 1.2em;
+  padding: .8em 1em;
+  display: flex;
+  gap: .9em;
+  align-items: center;
   background: rgba(255,255,255,.05);
   border: 1px solid rgba(150,165,230,.35);
   border-radius: 8px;
   cursor: pointer;
   transition: background .15s, border-color .15s;
 }
+
+.slot-thumb {
+  width: clamp(70px, 9vw, 118px);
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 5px;
+  border: 1px solid rgba(150,165,230,.3);
+  flex-shrink: 0;
+}
+
+.slot-info { min-width: 0; }
 .slot:not(.disabled):hover { background: rgba(120,140,255,.18); border-color: rgba(180,195,255,.8); }
 .slot.disabled { cursor: default; opacity: .5; }
 .slot.empty { border-style: dashed; }
@@ -681,6 +699,15 @@ button, .slot, .thumb, .scene-item { touch-action: manipulation; }
   color: #9fe6a0;
   font-weight: bold;
 }
+
+/* 巻き戻し可能なバックログ行 */
+.backlog-entry.bl-jump { cursor: pointer; border-radius: 6px; padding: .3em .5em; margin-left: -.5em; }
+.backlog-entry.bl-jump:hover { background: rgba(120,140,255,.14); }
+.bl-hint { font-size: .55em; color: #6a7089; font-weight: normal; margin-left: 1em; }
+
+/* 音楽鑑賞 */
+.music-item.playing { border-color: rgba(150,220,150,.8); }
+.music-item.playing::after { content: " ♪ 再生中"; color: #9fe6a0; }
 
 .bl-voice {
   margin-left: .8em;

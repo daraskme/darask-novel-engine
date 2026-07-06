@@ -1,0 +1,37 @@
+# main へ push するたびに Cloudflare Pages へ自動デプロイ
+# 事前準備:
+#   1. Cloudflare ダッシュボード → Workers & Pages → Pages プロジェクト
+#      "darask-novel-engine" を作成 (Direct Upload)
+#   2. GitHub リポジトリの Settings → Secrets and variables → Actions に
+#      CLOUDFLARE_API_TOKEN (Pages 編集権限) と CLOUDFLARE_ACCOUNT_ID を登録
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect web files
+        run: |
+          mkdir -p public
+          cp index.html style.css engine.js public/
+          cp *.txt public/ 2>/dev/null || true
+          for d in bg cg bgm se; do
+            [ -d "$d" ] && cp -r "$d" public/ || true
+          done
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy public --project-name=darask-novel-engine

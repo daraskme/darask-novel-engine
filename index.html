@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Darask Novel Engine</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="stage">
+
+  <!-- ========== タイトル画面 ========== -->
+  <div id="screen-title" class="screen">
+    <div class="title-inner">
+      <h1 id="game-title">Darask Novel Engine</h1>
+      <p class="title-sub">scenario.txt を置くだけのノベルゲームエンジン</p>
+      <nav class="title-menu">
+        <button data-action="start">はじめから</button>
+        <button data-action="continue" id="btn-continue">つづきから</button>
+        <button data-action="gallery">CGギャラリー</button>
+        <button data-action="scenes">シーン鑑賞</button>
+        <button data-action="settings">設定</button>
+      </nav>
+    </div>
+  </div>
+
+  <!-- ========== ゲーム画面 ========== -->
+  <div id="screen-game" class="screen hidden">
+    <img id="bg-img" alt="">
+    <img id="cg-img" class="hidden" alt="">
+
+    <div id="message-window">
+      <div id="name-plate" class="hidden"></div>
+      <div id="text-area"></div>
+      <div id="next-indicator" class="hidden">▼</div>
+    </div>
+
+    <div id="choice-box" class="hidden"></div>
+
+    <div id="mode-indicator" class="hidden"></div>
+    <button id="btn-game-menu" title="メニュー (Esc)">≡</button>
+  </div>
+
+  <!-- ========== CGギャラリー ========== -->
+  <div id="screen-gallery" class="screen sub-screen hidden">
+    <header class="sub-header">
+      <h2>CGギャラリー</h2>
+      <button class="btn-back">← 戻る</button>
+    </header>
+    <div id="gallery-grid" class="grid"></div>
+  </div>
+
+  <!-- ========== シーン鑑賞 ========== -->
+  <div id="screen-scenes" class="screen sub-screen hidden">
+    <header class="sub-header">
+      <h2>シーン鑑賞</h2>
+      <button class="btn-back">← 戻る</button>
+    </header>
+    <div id="scene-list" class="list"></div>
+  </div>
+
+  <!-- ========== 設定 ========== -->
+  <div id="screen-settings" class="screen sub-screen hidden">
+    <header class="sub-header">
+      <h2>設定</h2>
+      <button class="btn-back">← 戻る</button>
+    </header>
+    <div class="settings-body">
+      <section>
+        <h3>ゲーム設定</h3>
+        <label>文字表示速度
+          <input type="range" id="opt-text-speed" min="0" max="100" step="5">
+          <span class="opt-val" id="val-text-speed"></span>
+        </label>
+        <label>オート待ち時間
+          <input type="range" id="opt-auto-wait" min="500" max="5000" step="100">
+          <span class="opt-val" id="val-auto-wait"></span>
+        </label>
+        <label>BGM音量
+          <input type="range" id="opt-bgm-vol" min="0" max="100" step="5">
+          <span class="opt-val" id="val-bgm-vol"></span>
+        </label>
+        <label>効果音音量
+          <input type="range" id="opt-se-vol" min="0" max="100" step="5">
+          <span class="opt-val" id="val-se-vol"></span>
+        </label>
+      </section>
+      <section>
+        <h3>ショートカットキー</h3>
+        <p class="hint">「変更」を押してから割り当てたいキーを押してください。</p>
+        <div id="key-config"></div>
+        <button id="btn-reset-keys">キー設定を初期化</button>
+      </section>
+    </div>
+  </div>
+
+  <!-- ========== オーバーレイ類 ========== -->
+  <div id="overlay-menu" class="overlay hidden">
+    <div class="menu-panel">
+      <button data-menu="save">セーブ</button>
+      <button data-menu="load">ロード</button>
+      <button data-menu="auto">オート ON/OFF</button>
+      <button data-menu="backlog">バックログ</button>
+      <button data-menu="settings">設定</button>
+      <button data-menu="title">タイトルへ戻る</button>
+      <button data-menu="close">閉じる</button>
+    </div>
+  </div>
+
+  <div id="overlay-backlog" class="overlay hidden">
+    <div class="backlog-panel">
+      <header class="sub-header">
+        <h2>バックログ</h2>
+        <button id="btn-backlog-close">閉じる</button>
+      </header>
+      <div id="backlog-list"></div>
+    </div>
+  </div>
+
+  <div id="overlay-viewer" class="overlay hidden">
+    <img id="viewer-img" alt="">
+  </div>
+
+  <div id="overlay-file" class="overlay hidden">
+    <div class="file-panel">
+      <h2>シナリオファイルを読み込む</h2>
+      <p>scenario.txt を自動で読み込めませんでした。<br>
+         ローカルサーバー経由で開くか、下からファイルを選択してください。<br>
+         (分岐で複数ファイルを使う場合はまとめて選択できます)</p>
+      <input type="file" id="file-input" accept=".txt" multiple>
+      <p class="hint">ここに .txt ファイルをドロップしても読み込めます</p>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+</div>
+
+<script src="engine.js"></script>
+</body>
+</html>

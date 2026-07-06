@@ -1,0 +1,38 @@
+{
+  "name": "darask-novel-engine",
+  "version": "1.0.0",
+  "description": "テキストファイルを置くだけのシンプルなノベルゲームエンジン",
+  "author": "darask",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "me.darask.novel-engine",
+    "productName": "DaraskNovelEngine",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**",
+      "index.html",
+      "style.css",
+      "engine.js",
+      "*.txt",
+      "bg/**",
+      "cg/**",
+      "bgm/**",
+      "se/**"
+    ],
+    "win": {
+      "target": "portable"
+    }
+  }
+}

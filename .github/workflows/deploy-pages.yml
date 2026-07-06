@@ -25,7 +25,7 @@ jobs:
           mkdir -p public
           cp index.html style.css engine.js public/
           cp *.txt public/ 2>/dev/null || true
-          for d in bg cg bgm se; do
+          for d in bg chara cg bgm se; do
             [ -d "$d" ] && cp -r "$d" public/ || true
           done
 

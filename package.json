@@ -27,6 +27,7 @@
       "engine.js",
       "*.txt",
       "bg/**",
+      "chara/**",
       "cg/**",
       "bgm/**",
       "se/**"
